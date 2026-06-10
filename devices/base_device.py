@@ -1,0 +1,114 @@
+from http.server import BaseHTTPRequestHandler, HTTPServer
+import threading
+import socket
+import struct
+
+MULTICAST_IP = "239.255.255.250"
+PORT = 1900
+
+class BaseDevice:
+
+    def __init__(self, device_id, location, http_port, device_description):
+
+        self.device_id = device_id
+        self.location = location
+        self.http_port = http_port
+        self.device_description = device_description
+
+    def start_http(self):
+
+        description = self.device_description
+
+        class Handler(BaseHTTPRequestHandler):
+
+            def do_GET(inner_self):
+
+                if inner_self.path == "/device.json":
+
+                    inner_self.send_response(200)
+                    inner_self.send_header("Content-type", "application/json")
+                    inner_self.end_headers()
+
+                    inner_self.wfile.write(description.encode())
+
+        threading.Thread(target=lambda:
+            HTTPServer(
+                ("localhost", self.http_port),
+                Handler
+            ).serve_forever(),
+            daemon=True
+        ).start()
+
+        print(f"[{self.device_id}] HTTP server started on {self.http_port}")
+
+    def send_notify(self, sock):
+        msg = f"""NOTIFY * HTTP/1.1
+        HOST: {MULTICAST_IP}:{PORT}
+        NTS: ssdp:alive
+        USN: {self.device_id}
+        LOCATION: {self.location}
+
+        """
+
+        sock.sendto(msg.encode(),(MULTICAST_IP,PORT))
+        print(f"[{self.device_id}] SENT NOTIFY")
+
+    def send_byebye(self, sock):
+        msg = f"""NOTIFY * HTTP/1.1
+        HOST: {MULTICAST_IP}:{PORT}
+        NTS: ssdp:byebye
+        USN: {self.device_id} 
+
+        """
+
+        sock.sendto(msg.encode(),(MULTICAST_IP,PORT))
+
+    def handle_search(self,sock):
+
+        while True:
+
+            data, addr = sock.recvfrom(1024)
+
+            text = data.decode(errors = "ignore")
+
+            if "M-SEARCH" in text:
+
+                response = f"""HTTP/1.1
+                USN: {self.device_id}
+                LOCATION: {self.location}
+
+                """
+
+                print(f"[{self.device_id}] RECEIVED M-SEARCH")
+
+                sock.sendto(response.encode(), addr)
+                print(f"[{self.device_id}] SENT RESPONSE")
+
+    def create_ssdp_socket(self):
+
+        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR,1)
+
+        try:
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEPORT, 1)
+        except:
+            pass
+
+        sock.bind(("", PORT))
+
+        mreq = struct.pack("4sl", socket.inet_aton(MULTICAST_IP), socket.INADDR_ANY)
+        sock.setsockopt(socket.IPPROTO_IP,socket.IP_ADD_MEMBERSHIP,mreq)
+
+        return sock
+    
+    def start(self):
+
+        sock = self.create_ssdp_socket()
+
+        self.start_http()
+        self.send_notify(sock)
+        self.handle_search(sock)
+
+        
+        
