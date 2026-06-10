@@ -2,24 +2,32 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 import threading
 import socket
 import struct
+import time
 
 MULTICAST_IP = "239.255.255.250"
 PORT = 1900
 
 class BaseDevice:
 
-    def __init__(self, device_id, location, http_port, device_description):
+    def __init__(self, device_id, device_type, location, http_port, device_description):
 
         self.device_id = device_id
+        self.device_type = device_type
         self.location = location
         self.http_port = http_port
         self.device_description = device_description
+
+    def log(self, message):
+        print(f"[{self.device_id}] {message}")
 
     def start_http(self):
 
         description = self.device_description
 
         class Handler(BaseHTTPRequestHandler):
+
+            def log_message(self, format, *args):
+                pass
 
             def do_GET(inner_self):
 
@@ -39,25 +47,27 @@ class BaseDevice:
             daemon=True
         ).start()
 
-        print(f"[{self.device_id}] HTTP server started on {self.http_port}")
+        self.log(f"HTTP server started on port {self.http_port}")
 
     def send_notify(self, sock):
         msg = f"""NOTIFY * HTTP/1.1
         HOST: {MULTICAST_IP}:{PORT}
+        NT: urn:project-iot:{self.device_type}
         NTS: ssdp:alive
-        USN: {self.device_id}
+        USN: project-iot:{self.device_id}
         LOCATION: {self.location}
 
         """
 
         sock.sendto(msg.encode(),(MULTICAST_IP,PORT))
-        print(f"[{self.device_id}] SENT NOTIFY")
+        self.log("Alive notification sent")
 
     def send_byebye(self, sock):
         msg = f"""NOTIFY * HTTP/1.1
         HOST: {MULTICAST_IP}:{PORT}
+        NT: urn:project-iot:{self.device_type}
         NTS: ssdp:byebye
-        USN: {self.device_id} 
+        USN: project-iot:{self.device_id} 
 
         """
 
@@ -71,18 +81,20 @@ class BaseDevice:
 
             text = data.decode(errors = "ignore")
 
-            if "M-SEARCH" in text:
+            if "M-SEARCH" in text and "ST: urn:project-iot:device" in text:
 
-                response = f"""HTTP/1.1
-                USN: {self.device_id}
-                LOCATION: {self.location}
+                response = (
+                    f"HTTP/1.1 200 OK\n"
+                    f"ST: urn:project-iot:{self.device_type}\n"
+                    f"USN: project-iot:{self.device_id}\n"
+                    f"LOCATION: {self.location}\n\n"
+                )
 
-                """
-
-                print(f"[{self.device_id}] RECEIVED M-SEARCH")
+                self.log("Discovery request received")
 
                 sock.sendto(response.encode(), addr)
-                print(f"[{self.device_id}] SENT RESPONSE")
+                
+                self.log("Discovery response sent")
 
     def create_ssdp_socket(self):
 
@@ -107,7 +119,11 @@ class BaseDevice:
         sock = self.create_ssdp_socket()
 
         self.start_http()
+
+        time.sleep(0.5)
+
         self.send_notify(sock)
+
         self.handle_search(sock)
 
         

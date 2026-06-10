@@ -4,8 +4,51 @@ import struct
 import time
 import threading
 
+def log(message):
+    print(f"[CONTROLLER] {message}")
+
+def separator():
+    print("-" * 40)
+
+def device_registered(info):
+
+    separator()
+
+    log(f"Registered: {info['id']}")
+
+    show_devices()
+
+    separator()
+
+def show_devices():
+
+    print( f"\n[CONTROLLER] Active devices ({len(devices)}):")
+
+    if not devices:
+        print("  (none)")
+        return
+
+    for usn, info in devices.items():
+        print(f"  - {info['id']}")
+
 MULTICAST_IP = "239.255.255.250"
 PORT = 1900
+
+def parse_ssdp_message(text):
+
+    headers = {}
+
+    for line in text.splitlines():
+
+        line = line.strip()
+
+        if ": " in line:
+
+            key, value = line.split(": ", 1)
+
+            headers[key] = value
+
+    return headers
 
 devices = {}
 
@@ -26,22 +69,21 @@ sock.setsockopt(socket.IPPROTO_IP, socket.IP_ADD_MEMBERSHIP, mreq)
 # send M-SEARCH
 msg = """M-SEARCH * HTTP/1.1
 HOST: 239.255.255.250:1900
-ST: ssdp:all
+ST: urn:project-iot:device
 MAN: "ssdp:discover"
 MX: 2
 
 """
-print("\n--- SENT M-SEARCH ---")
-print(msg)
 
-#sock.sendto(msg.encode(), (MULTICAST_IP, PORT))
+print("\n" + "=" * 40)
+print("      IoT SSDP Controller")
+print("=" * 40)
 
-print("Searching for devices...\n")
+show_devices()
 
 def send_search():
     while True:
-        print("\n--- SENT M-SEARCH ---")
-        print(msg)
+        log("Searching for IoT devices...")
 
         sock.sendto(msg.encode(), (MULTICAST_IP, PORT))
         time.sleep(5)   # svakih 5 sekundi
@@ -52,43 +94,75 @@ while True:
     data, addr = sock.recvfrom(1024)
     text = data.decode(errors="ignore")
 
-    print("\n--- RECEIVED ---")
-    print(text)
+    if text.startswith("M-SEARCH"):
+        continue
+
+    if("project-iot:" not in text and "urn:project-iot:" not in text):
+        continue
+
+    #print("\n--- RECEIVED ---")
+    #print(text)
 
     # HANDLE BYEBYE
     if "ssdp:byebye" in text:
-        for line in text.split("\n"):
-            if "USN" in line:
-                device_id = line.split(": ", 1)[1].strip()
-                if device_id in devices:
-                    print(f"\nDevice OFFLINE: {device_id}")
-                    del devices[device_id]
-                    print("Devices:", list(devices.keys()))
+
+        headers = parse_ssdp_message(text)
+
+        usn = headers.get("USN")
+        device_id = headers.get("device_id")
+
+        if usn and usn in devices:
+
+            log(f"Device offline: {device_id}")
+            del devices[usn]
+            show_devices()
 
     # HANDLE ALIVE / RESPONSE
     if "LOCATION" in text:
-        location = None
-        usn = None
 
-        for line in text.split("\n"):
-            if "LOCATION" in line:
-                location = line.split(": ", 1)[1].strip()
-            if "USN" in line:
-                usn = line.split(": ", 1)[1].strip()
+        headers = parse_ssdp_message(text)
 
-        if location and usn and usn not in devices:
-            print(f"\nFound device: {usn} at {location}")
+        location = headers.get("LOCATION")
+        usn = headers.get("USN")
+
+        if not location or not usn:
+            continue
+
+        if usn in devices:
+            continue
+
+        log(f"Device discovered: {usn}")
+
+        success = False
+
+        for attempt in range(3):
 
             try:
+
                 r = requests.get(location, timeout=2)
+
                 info = r.json()
 
-                devices[info["id"]] = info
+                devices[usn] = info
 
-                print("Registered:", info)
-                print("Devices:", list(devices.keys()))
+                device_registered(info)
 
-            except Exception as e:
-                print("Failed:", e)
-        elif usn in devices:
-            print(f"Already known device: {usn}")
+                success = True
+                break
+
+            except Exception:
+
+                print(
+                    f"[CONTROLLER] "
+                    f"Connection attempt {attempt + 1}/3 failed"
+                )
+
+                time.sleep(1)
+
+        if not success:
+
+            print(
+                f"[CONTROLLER] "
+                f"Failed to register {usn}"
+            )
+
