@@ -3,6 +3,8 @@ import threading
 import socket
 import struct
 import time
+import signal
+import sys
 
 MULTICAST_IP = "239.255.255.250"
 PORT = 1900
@@ -50,14 +52,16 @@ class BaseDevice:
         self.log(f"HTTP server started on port {self.http_port}")
 
     def send_notify(self, sock):
-        msg = f"""NOTIFY * HTTP/1.1
-        HOST: {MULTICAST_IP}:{PORT}
-        NT: urn:project-iot:{self.device_type}
-        NTS: ssdp:alive
-        USN: project-iot:{self.device_id}
-        LOCATION: {self.location}
 
-        """
+        msg = (
+        f"NOTIFY * HTTP/1.1\n"
+        f"HOST: {MULTICAST_IP}:{PORT}\n"
+        f"CACHE-CONTROL: max-age=30\n"
+        f"NT: urn:project-iot:{self.device_type}\n"
+        f"NTS: ssdp:alive\n"
+        f"USN: project-iot:{self.device_id}\n"
+        f"LOCATION: {self.location}\n\n"
+        )
 
         sock.sendto(msg.encode(),(MULTICAST_IP,PORT))
         self.log("Alive notification sent")
@@ -72,6 +76,8 @@ class BaseDevice:
         """
 
         sock.sendto(msg.encode(),(MULTICAST_IP,PORT))
+
+        self.log("Byebye notification sent")
 
     def handle_search(self,sock):
 
@@ -118,13 +124,40 @@ class BaseDevice:
 
         sock = self.create_ssdp_socket()
 
+        def singal_handler(sig, frame):
+            self.shutdown(sock)
+
+        signal.signal(signal.SIGINT, singal_handler)
+
         self.start_http()
 
         time.sleep(0.5)
 
         self.send_notify(sock)
 
+        threading.Thread(target=self.send_alive_periodically, args=(sock,),daemon=True).start()
+
         self.handle_search(sock)
+
+    def shutdown(self, sock):
+
+        self.log("Shutting down...")
+
+        self.send_byebye(sock)
+
+        time.sleep(0.2)
+
+        sys.exit(0)
+
+    def send_alive_periodically(self, sock):
+
+        while True:
+
+            time.sleep(15)
+
+            self.send_notify(sock)
+
+
 
         
         

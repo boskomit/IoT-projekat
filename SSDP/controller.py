@@ -29,7 +29,40 @@ def show_devices():
         return
 
     for usn, info in devices.items():
-        print(f"  - {info['id']}")
+        print(f"  - {info['info']['id']}")
+
+def remove_expired_devices():
+
+    while True:
+
+        now = time.time()
+
+        expired = []
+
+        for usn, device in devices.items():
+
+            age = now - device["last_seen"]
+
+            if age > device["max_age"]:
+
+                expired.append(usn)
+
+        for usn in expired:
+
+            separator()
+
+            log(
+                f"Device timeout: "
+                f"{devices[usn]['info']['id']}"
+            )
+
+            del devices[usn]
+
+            show_devices()
+
+            separator()
+
+        time.sleep(5)
 
 MULTICAST_IP = "239.255.255.250"
 PORT = 1900
@@ -84,11 +117,13 @@ show_devices()
 def send_search():
     while True:
         log("Searching for IoT devices...")
+        #show_devices()
 
         sock.sendto(msg.encode(), (MULTICAST_IP, PORT))
         time.sleep(5)   # svakih 5 sekundi
 
 threading.Thread(target=send_search, daemon=True).start()
+threading.Thread(target=remove_expired_devices, daemon=True).start()
 
 while True:
     data, addr = sock.recvfrom(1024)
@@ -100,25 +135,67 @@ while True:
     if("project-iot:" not in text and "urn:project-iot:" not in text):
         continue
 
-    #print("\n--- RECEIVED ---")
-    #print(text)
-
     # HANDLE BYEBYE
     if "ssdp:byebye" in text:
 
         headers = parse_ssdp_message(text)
 
         usn = headers.get("USN")
-        device_id = headers.get("device_id")
 
         if usn and usn in devices:
 
-            log(f"Device offline: {device_id}")
+            separator()
+
+            log(f"Device offline: {devices[usn]['info']['id']}")
             del devices[usn]
             show_devices()
 
-    # HANDLE ALIVE / RESPONSE
-    if "LOCATION" in text:
+            separator()
+
+    # HANDLE ALIVE
+
+    if "ssdp:alive" in text:
+
+        headers = parse_ssdp_message(text)
+
+        location = headers.get("LOCATION")
+        usn = headers.get("USN")
+
+        if not location or not usn:
+            continue
+
+        if usn in devices:
+
+            devices[usn]["last_seen"] = time.time()
+            continue
+
+        # NOVI UREĐAJ
+
+        log(f"Device discovered: {usn}")
+
+        try:
+
+            r = requests.get(location, timeout=2)
+
+            info = r.json()
+
+            devices[usn] = {
+                "info": info,
+                "last_seen": time.time(),
+                "max_age": 30
+            }
+
+            device_registered(info)
+
+        except Exception as e:
+
+            log(f"Failed to register {usn}")
+
+    # HANDLE DISCOVERY RESPONSE
+
+"""
+    if "HTTP/1.1 200 OK" in text:
+        print("DISCOVERY RESPONSE RECEIVED")
 
         headers = parse_ssdp_message(text)
 
@@ -143,10 +220,13 @@ while True:
 
                 info = r.json()
 
-                devices[usn] = info
+                devices[usn] = {
+                    "info": info,
+                    "last_seen": time.time(),
+                    "max_age": 30
+                }
 
                 device_registered(info)
-                
 
                 success = True
                 break
@@ -167,3 +247,4 @@ while True:
                 f"Failed to register {usn}"
             )
 
+"""
