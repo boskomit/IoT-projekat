@@ -4,6 +4,10 @@ import struct
 import time
 import threading
 
+MULTICAST_IP = "239.255.255.250"
+PORT = 1900
+
+
 def log(message):
     print(f"[CONTROLLER] {message}")
 
@@ -19,6 +23,39 @@ def device_registered(info):
     show_devices()
 
     separator()
+
+def register_device(usn, location):
+
+    for attempt in range(3):
+
+        try:
+
+            r = requests.get(location, timeout=2)
+
+            info = r.json()
+
+            devices[usn] = {
+                "info": info,
+                "last_seen": time.time(),
+                "max_age": 30
+            }
+
+            device_registered(info)
+
+            return True
+
+        except Exception:
+
+            log(
+                f"Connection attempt "
+                f"{attempt + 1}/3 failed"
+            )
+
+            time.sleep(1)
+
+    log(f"Failed to register {usn}")
+
+    return False
 
 def show_devices():
 
@@ -64,9 +101,6 @@ def remove_expired_devices():
 
         time.sleep(5)
 
-MULTICAST_IP = "239.255.255.250"
-PORT = 1900
-
 def parse_ssdp_message(text):
 
     headers = {}
@@ -83,21 +117,56 @@ def parse_ssdp_message(text):
 
     return headers
 
+def receive_search_responses():
+
+    while True:
+
+        try:
+
+            data, addr = search_sock.recvfrom(1024)
+
+            text = data.decode(errors="ignore")
+
+            if "HTTP/1.1 200 OK" in text:
+
+                print("DISCOVERY RESPONSE RECEIVED")
+
+                headers = parse_ssdp_message(text)
+
+                location = headers.get("LOCATION")
+                usn = headers.get("USN")
+
+                if not location or not usn:
+                    continue
+
+                if usn in devices:
+                    continue
+
+                log(f"Device discovered: {usn}")
+
+                register_device(usn,location)
+
+        except socket.timeout:
+            pass
+
 devices = {}
 
-sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+listen_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+listen_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
 
 try:
-    sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEPORT, 1)
+    listen_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEPORT, 1)
 except:
     pass
 
-sock.bind(("", PORT))
+listen_sock.bind(("", PORT))
 
 # join multicast group
 mreq = struct.pack("4sl", socket.inet_aton(MULTICAST_IP), socket.INADDR_ANY)
-sock.setsockopt(socket.IPPROTO_IP, socket.IP_ADD_MEMBERSHIP, mreq)
+listen_sock.setsockopt(socket.IPPROTO_IP, socket.IP_ADD_MEMBERSHIP, mreq)
+
+search_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+search_sock.settimeout(2)
 
 # send M-SEARCH
 msg = """M-SEARCH * HTTP/1.1
@@ -119,14 +188,15 @@ def send_search():
         log("Searching for IoT devices...")
         #show_devices()
 
-        sock.sendto(msg.encode(), (MULTICAST_IP, PORT))
+        search_sock.sendto(msg.encode(), (MULTICAST_IP, PORT))
         time.sleep(5)   # svakih 5 sekundi
 
 threading.Thread(target=send_search, daemon=True).start()
 threading.Thread(target=remove_expired_devices, daemon=True).start()
+threading.Thread(target=receive_search_responses, daemon=True).start()
 
 while True:
-    data, addr = sock.recvfrom(1024)
+    data, addr = listen_sock.recvfrom(1024)
     text = data.decode(errors="ignore")
 
     if text.startswith("M-SEARCH"):
@@ -158,93 +228,12 @@ while True:
 
         headers = parse_ssdp_message(text)
 
-        location = headers.get("LOCATION")
         usn = headers.get("USN")
-
-        if not location or not usn:
-            continue
 
         if usn in devices:
 
             devices[usn]["last_seen"] = time.time()
-            continue
+        
+        continue
 
-        # NOVI UREĐAJ
 
-        log(f"Device discovered: {usn}")
-
-        try:
-
-            r = requests.get(location, timeout=2)
-
-            info = r.json()
-
-            devices[usn] = {
-                "info": info,
-                "last_seen": time.time(),
-                "max_age": 30
-            }
-
-            device_registered(info)
-
-        except Exception as e:
-
-            log(f"Failed to register {usn}")
-
-    # HANDLE DISCOVERY RESPONSE
-
-"""
-    if "HTTP/1.1 200 OK" in text:
-        print("DISCOVERY RESPONSE RECEIVED")
-
-        headers = parse_ssdp_message(text)
-
-        location = headers.get("LOCATION")
-        usn = headers.get("USN")
-
-        if not location or not usn:
-            continue
-
-        if usn in devices:
-            continue
-
-        log(f"Device discovered: {usn}")
-
-        success = False
-
-        for attempt in range(3):
-
-            try:
-
-                r = requests.get(location, timeout=2)
-
-                info = r.json()
-
-                devices[usn] = {
-                    "info": info,
-                    "last_seen": time.time(),
-                    "max_age": 30
-                }
-
-                device_registered(info)
-
-                success = True
-                break
-
-            except Exception:
-
-                print(
-                    f"[CONTROLLER] "
-                    f"Connection attempt {attempt + 1}/3 failed"
-                )
-
-                time.sleep(1)
-
-        if not success:
-
-            print(
-                f"[CONTROLLER] "
-                f"Failed to register {usn}"
-            )
-
-"""

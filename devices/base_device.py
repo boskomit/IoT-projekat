@@ -9,6 +9,23 @@ import sys
 MULTICAST_IP = "239.255.255.250"
 PORT = 1900
 
+def parse_ssdp_message(text):
+
+    headers = {}
+
+    for line in text.splitlines():
+
+        line = line.strip()
+
+        if ": " in line:
+
+            key, value = line.split(": ", 1)
+
+            headers[key] = value
+
+    return headers
+
+
 class BaseDevice:
 
     def __init__(self, device_id, device_type, location, http_port, device_description):
@@ -87,7 +104,13 @@ class BaseDevice:
 
             text = data.decode(errors = "ignore")
 
-            if "M-SEARCH" in text and "ST: urn:project-iot:device" in text:
+            headers = parse_ssdp_message(text)
+
+            #print(headers)
+
+            if (text.startswith("M-SEARCH") and headers.get("MAN") == '"ssdp:discover"' and headers.get("ST") == "urn:project-iot:device"):
+
+                self.log("MAN validation passed")
 
                 response = (
                     f"HTTP/1.1 200 OK\n"
@@ -156,6 +179,8 @@ class BaseDevice:
             time.sleep(15)
 
             self.send_notify(sock)
+
+
 
 
 
