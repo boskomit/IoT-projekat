@@ -146,6 +146,7 @@ while True:
                 devices[usn] = info
 
                 device_registered(info)
+                
 
                 success = True
                 break
