@@ -3,6 +3,7 @@ import requests
 import struct
 import time
 import threading
+from device_registry import DeviceRegistry
 
 MULTICAST_IP = "239.255.255.250"
 PORT = 1900
@@ -34,11 +35,7 @@ def register_device(usn, location):
 
             info = r.json()
 
-            devices[usn] = {
-                "info": info,
-                "last_seen": time.time(),
-                "max_age": 30
-            }
+            registry.register(usn, info)
 
             device_registered(info)
 
@@ -59,6 +56,8 @@ def register_device(usn, location):
 
 def show_devices():
 
+    devices = registry.get_all()
+
     print( f"\n[CONTROLLER] Active devices ({len(devices)}):")
 
     if not devices:
@@ -72,28 +71,18 @@ def remove_expired_devices():
 
     while True:
 
-        now = time.time()
+        for usn in registry.get_expired():
 
-        expired = []
-
-        for usn, device in devices.items():
-
-            age = now - device["last_seen"]
-
-            if age > device["max_age"]:
-
-                expired.append(usn)
-
-        for usn in expired:
+            device = registry.get(usn)
 
             separator()
 
             log(
                 f"Device timeout: "
-                f"{devices[usn]['info']['id']}"
+                f"{device["info"]["id"]}"
             )
 
-            del devices[usn]
+            registry.remove(usn)
 
             show_devices()
 
@@ -139,7 +128,7 @@ def receive_search_responses():
                 if not location or not usn:
                     continue
 
-                if usn in devices:
+                if usn in registry.get_all():
                     continue
 
                 log(f"Device discovered: {usn}")
@@ -149,8 +138,11 @@ def receive_search_responses():
         except socket.timeout:
             pass
 
-devices = {}
 
+# DEVICES KEPT HERE
+registry = DeviceRegistry()
+
+# SOCKET FOR ALIVE AND BYEBYE
 listen_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 listen_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
 
@@ -165,6 +157,7 @@ listen_sock.bind(("", PORT))
 mreq = struct.pack("4sl", socket.inet_aton(MULTICAST_IP), socket.INADDR_ANY)
 listen_sock.setsockopt(socket.IPPROTO_IP, socket.IP_ADD_MEMBERSHIP, mreq)
 
+# SOCKET FOR SEARCH MESSAGES AND RESPONSES
 search_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 search_sock.settimeout(2)
 
@@ -212,12 +205,14 @@ while True:
 
         usn = headers.get("USN")
 
-        if usn and usn in devices:
+        if usn and usn in registry.get_all():
+
+            device = registry.get(usn)
 
             separator()
 
-            log(f"Device offline: {devices[usn]['info']['id']}")
-            del devices[usn]
+            log(f"Device offline: {device["info"]["id"]}")
+            registry.remove(usn)
             show_devices()
 
             separator()
@@ -230,9 +225,9 @@ while True:
 
         usn = headers.get("USN")
 
-        if usn in devices:
+        if usn in registry.get_all():
 
-            devices[usn]["last_seen"] = time.time()
+            registry.update_last_seen(usn)
         
         continue
 
