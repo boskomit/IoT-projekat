@@ -84,13 +84,14 @@ class BaseDevice:
         self.log("Alive notification sent")
 
     def send_byebye(self, sock):
-        msg = f"""NOTIFY * HTTP/1.1
-        HOST: {MULTICAST_IP}:{PORT}
-        NT: urn:project-iot:{self.device_type}
-        NTS: ssdp:byebye
-        USN: project-iot:{self.device_id} 
-
-        """
+        
+        msg = (
+            f"NOTIFY * HTTP/1.1\n"
+            f"HOST: {MULTICAST_IP}:{PORT}\n"
+            f"NT: urn:project-iot:{self.device_type}\n"
+            f"NTS: ssdp:byebye\n"
+            f"USN: project-iot:{self.device_id}\n\n"
+        )
 
         sock.sendto(msg.encode(),(MULTICAST_IP,PORT))
 

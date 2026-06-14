@@ -1,0 +1,34 @@
+kako se pokrece ssdp:
+1. terminal: python3 controller.py
+2. terminal: python3 -m devices.sensors.motion_sensor_1  (na primjer)
+
+ctrl + c salje byebye poruku (implementiran je handler)
+ako ubijemo terminal u kom radi uredjaj, nakon 30 sekundi ce controller da odjavi uredjaj
+uredjaj salje alive poruku svakih 15 sekundi
+ima sve provjere da controller prima samo uredjaje koji su unutar nase iot mreze
+
+
+## DEVICES ##
+__init.py__ u folderima naznacava da su to paketi pa se zato pokrece sa onim tackama
+(iz nekog razloga nije radilo drugacije)
+
+base_device je glavna funkcija vezana za devices
+tu se nalazi klasa BaseDevice i sve funkcije vezane za slanje poruka i izvrsavanje komandi
+u actuators i sensors samo pravimo uredjaje pomocu konstruktora
+
+
+## CONTROLLER ##
+odrzava mrezu, nalaze se sve potrebne funkcije, za razliku od prosli put koristi dva socketa,
+jedan za search poruke drugi za alive/byebye i slicno
+glavna funkcija je parse_headers koja izvlaci korisne informacije iz poruke, posle se sve radi 
+pomocu device_registry
+device_registry je klasa koja cuva nase uredjaje, da ne bi imali samo devices = {} u kontroleru
+(nadam se da ce ovo biti od pomoci posle i za mqtt)
+
+## STA TREBA URADITI ##
+1. mqtt (koristiti mosquitto)
+vidjeti u praktikumu sta sve treba implementirati
+
+2. CLI (command line interface)
+da imamo jedan centralni terminal iz koga cemo da pozivamo sve sto nas projekat radi:
+ssdp provjere, lista uredjaja, test metode iz mqtt i slicno

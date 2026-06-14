@@ -1,34 +1,47 @@
+import threading
 import time
 
 class DeviceRegistry:
 
     def __init__(self):
         self.devices = {}
+        self.lock = threading.Lock()
 
     def register(self, usn, info, max_age = 30):
-        self.devices[usn] = {
-            "info" : info,
-            "last_seen" : time.time(),
-            "max_age" : max_age
-        }
+        with self.lock:
+            self.devices[usn] = {
+                "info" : info,
+                "last_seen" : time.time(),
+                "max_age" : max_age
+            }
 
     def update_last_seen(self, usn):
-        if usn in self.devices:
-            self.devices[usn]["last_seen"] = time.time()
+        with self.lock:
+            if usn in self.devices:
+                self.devices[usn]["last_seen"] = time.time()
 
     def remove(self, usn):
-        self.devices.pop(usn,None)
+        with self.lock:
+            self.devices.pop(usn,None)
 
     def exists(self, usn):
-        return usn in self.devices
+        with self.lock:
+            return usn in self.devices
     
     def get(self,usn):
-        return self.devices.get(usn)
+        with self.lock:
+            device = self.devices.get(usn)
+            return device.copy() if device else None
     
     def get_all(self):
-        return self.devices
+        with self.lock:
+            return {usn: device.copy() for usn, device in self.devices.items()}
 
     def get_expired(self):
-        now = time.time()
-
-        return [usn for usn,device in self.devices.items() if now - device["last_seen"] > device["max_age"]]    
+        with self.lock:
+            now = time.time()
+            return [
+                usn
+                for usn, device in self.devices.items()
+                if now - device["last_seen"] > device["max_age"]
+            ]

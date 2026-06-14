@@ -79,7 +79,7 @@ def remove_expired_devices():
 
             log(
                 f"Device timeout: "
-                f"{device["info"]["id"]}"
+                f"{device['info']['id']}"
             )
 
             registry.remove(usn)
@@ -211,7 +211,7 @@ while True:
 
             separator()
 
-            log(f"Device offline: {device["info"]["id"]}")
+            log(f"Device offline: {device['info']['id']}")
             registry.remove(usn)
             show_devices()
 
