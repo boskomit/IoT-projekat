@@ -5,6 +5,9 @@ import struct
 import time
 import signal
 import sys
+#mqtt broker importi
+import paho.mqtt.client as mqtt
+import json
 
 MULTICAST_IP = "239.255.255.250"
 PORT = 1900
@@ -35,6 +38,9 @@ class BaseDevice:
         self.location = location
         self.http_port = http_port
         self.device_description = device_description
+        self.mqtt_client = mqtt.Client(client_id=self.device_id)
+        self.mqtt_client.on_connect = self.on_connect
+        self.mqtt_client.on_message = self.on_message
 
     def log(self, message):
         print(f"[{self.device_id}] {message}")
@@ -159,6 +165,8 @@ class BaseDevice:
 
         self.send_notify(sock)
 
+        self.start_mqtt()
+
         threading.Thread(target=self.send_alive_periodically, args=(sock,),daemon=True).start()
 
         self.handle_search(sock)
@@ -180,6 +188,42 @@ class BaseDevice:
             time.sleep(15)
 
             self.send_notify(sock)
+
+    # Dodaj ove nove metode unutar BaseDevice klase:
+    def start_mqtt(self):
+        try:
+            self.log("Connecting to MQTT Broker...")
+            self.mqtt_client.connect("localhost", 1883, 60)
+            self.mqtt_client.loop_start()  # Pokreće MQTT petnju u pozadinskoj niti
+        except Exception as e:
+            self.log(f"MQTT Connection failed: {e}")
+
+    def on_connect(self, client, userdata, flags, rc):
+        if rc == 0:
+            self.log("Connected to MQTT Broker!")
+            # Automatska pretplata za aktuatore (QoS 1)
+            if self.device_id == "light_actuator":
+                self.mqtt_client.subscribe("home/light/control", qos=1)
+            elif self.device_id == "blinds_actuator":
+                self.mqtt_client.subscribe("home/blinds/control", qos=1)
+            elif self.device_id == "thermostat_actuator":
+                self.mqtt_client.subscribe("home/hvac/control", qos=1)
+        else:
+            self.log(f"MQTT Connection refused with code {rc}")
+
+    def on_message(self, client, userdata, msg):
+        payload = msg.payload.decode()
+        self.log(f"Received MQTT command on [{msg.topic}]: {payload}")
+        
+        # SADA STVARNO PROSLEĐUJEMO KOMANDU AKTUATORU:
+        self.handle_actuator_command(msg.topic, payload)
+    def publish_data(self, topic, payload, qos=0):
+        try:
+            json_payload = json.dumps(payload)
+            self.mqtt_client.publish(topic, json_payload, qos=qos)
+            self.log(f"Published to [{topic}] (QoS {qos}): {json_payload}")
+        except Exception as e:
+            self.log(f"Failed to publish MQTT message: {e}")
 
 
 
