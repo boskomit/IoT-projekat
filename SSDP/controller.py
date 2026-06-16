@@ -3,17 +3,120 @@ import requests
 import struct
 import time
 import threading
+import json
+import paho.mqtt.client as mqtt
 from device_registry import DeviceRegistry
 
 MULTICAST_IP = "239.255.255.250"
 PORT = 1900
 
+# --- GLOBALNA STANJA SISTEMA (Dopunjeno sa keširanjem stanja aktuatora) ---
+people_count = 0          # Interni brojač prisutnih osoba
+current_temperature = 0.0 # Očitana temperatura u realnom vremenu
+target_temperature = 22.0 # Podrazumevana zadata temperatura
+
+# Kontroler ovde pamti poslednje poslate komande (kešira stanje aktuatora)
+trenutno_stanje_svetla = "OFF"
+trenutno_stanje_roletni = "DOWN"
 
 def log(message):
     print(f"[CONTROLLER] {message}")
 
 def separator():
     print("-" * 40)
+
+# --- PAMETNA LOGIKA UPRAVLJANJA ---
+
+def proveri_osvetljenje_i_roletne(client):
+    """Logika upravljanja koja šalje komande samo pri PROMENI stanja (Edge-triggered)."""
+    global people_count, trenutno_stanje_svetla, trenutno_stanje_roletni
+    
+    if people_count == 0:
+        # 1. Provera za svetlo
+        if trenutno_stanje_svetla != "OFF":
+            log("Kuća je prazna. Šaljem komandu za GAŠENJE svetla.")
+            client.publish("home/light/control", "OFF", qos=1)
+            trenutno_stanje_svetla = "OFF" # Ažuriramo keš
+            
+        # 2. Provera za roletne
+        if trenutno_stanje_roletni != "DOWN":
+            log("Kuća je prazna. Šaljem komandu za SPUŠTANJE roletni.")
+            client.publish("home/blinds/control", "DOWN", qos=1)
+            trenutno_stanje_roletni = "DOWN" # Ažuriramo keš
+    else:
+        # U kući ima ljudi (brojač > 0)
+        
+        # 1. Provera za svetlo - šalje se samo prvoj osobi koja kroči unutra
+        if trenutno_stanje_svetla != "ON":
+            log(f"Prva osoba je ušla (Ukupno: {people_count}). Palim svetlo.")
+            client.publish("home/light/control", "ON", qos=1)
+            trenutno_stanje_svetla = "ON"
+            
+        # 2. Provera za roletne - podižu se samo jednom i ostaju UP sve dok ima ljudi
+        if trenutno_stanje_roletni != "UP":
+            log(f"Prva osoba je ušla (Ukupno: {people_count}). PODIŽEM roletne.")
+            client.publish("home/blinds/control", "UP", qos=1)
+            trenutno_stanje_roletni = "UP"
+
+def proveri_termostat(client):
+    """Upravljanje grejanjem/hlađenjem na osnovu razlike u temperaturi (ARCH 2-1)."""
+    global current_temperature, target_temperature
+    
+    # Regulacija temperature poređenjem trenutne i zadate vrednosti (QoS 1)
+    if current_temperature < target_temperature - 0.5:
+        log(f"Hladno je ({current_temperature}°C). Aktiviram GREJANJE.")
+        client.publish("home/hvac/control", "HEAT", qos=1)
+    elif current_temperature > target_temperature + 0.5:
+        log(f"Toplo je ({current_temperature}°C). Aktiviram HLAĐENJE.")
+        client.publish("home/hvac/control", "COOL", qos=1)
+    else:
+        log(f"Temperatura je optimalna ({current_temperature}°C). Gasim HVAC.")
+        client.publish("home/hvac/control", "OFF", qos=1)
+
+# --- MQTT CALLBACK FUNKCIJE ---
+
+def on_mqtt_connect(client, userdata, flags, rc):
+    if rc == 0:
+        log("Uspešno povezan na lokalni MQTT Broker!")
+        # Centralni kontroler se pretplaćuje na senzorske topike (ARCH 1, ARCH 2 i ARCH 4)
+        client.subscribe("home/door/sensor1", qos=1) # Senzor ulaza (QoS 1)
+        client.subscribe("home/door/sensor2", qos=1) # Senzor izlaza (QoS 1)
+        client.subscribe("home/temp/current", qos=0) # Periodična temperatura (QoS 0)
+    else:
+        log(f"Greška pri povezivanju na MQTT Broker, kod: {rc}")
+
+def on_mqtt_message(client, userdata, msg):
+    global people_count, current_temperature
+    
+    try:
+        # Sve poruke u komunikaciji su predstavljene kroz JSON strukture
+        payload = json.loads(msg.payload.decode())
+        
+        # Obrada događaja sa senzora pokreta 1 (Ulaz)
+        if msg.topic == "home/door/sensor1":
+            count = payload.get("people_count", 1)
+            people_count += count # Brojač se inkrementira pri ulasku
+            log(f"[PROMENA] Detektovan ULAZAK. Trenutno ljudi u kući: {people_count}")
+            proveri_osvetljenje_i_roletne(client)
+            
+        # Obrada događaja sa senzora pokreta 2 (Izlaz)
+        elif msg.topic == "home/door/sensor2":
+            count = payload.get("people_count", 1)
+            people_count -= count # Brojač se dekrementira pri izlasku
+            if people_count < 0: 
+                people_count = 0
+            log(f"[PROMENA] Detektovan IZLAZAK. Trenutno ljudi u kući: {people_count}")
+            proveri_osvetljenje_i_roletne(client)
+            
+        # Obrada očitavanja temperature
+        elif msg.topic == "home/temp/current":
+            current_temperature = payload.get("temperature", 22.0)
+            log(f"[TELEMETRIJA] Senzor javio trenutnu temperaturu: {current_temperature}°C")
+            proveri_termostat(client)
+            
+    except Exception as e:
+        log(f"Greška pri parsiranju MQTT poruke: {e}")
+
 
 def device_registered(info):
 
@@ -182,8 +285,21 @@ def send_search():
         #show_devices()
 
         search_sock.sendto(msg.encode(), (MULTICAST_IP, PORT))
-        time.sleep(5)   # svakih 5 sekundi
+        time.sleep(10)   # Povećano na 10 sekundi radi manje zasićenosti logova
 
+# --- INICIJALIZACIJA I POKRETANJE MQTT KLIJENTA ---
+mqtt_client = mqtt.Client(client_id="central_controller")
+mqtt_client.on_connect = on_mqtt_connect
+mqtt_client.on_message = on_mqtt_message
+
+try:
+    log("Povezujem kontroler na MQTT Broker...")
+    mqtt_client.connect("localhost", 1883, 60)
+    mqtt_client.loop_start() # Pokreće MQTT u pozadinskoj niti, ne blokira SSDP niti
+except Exception as e:
+    log(f"MQTT povezivanje nije uspelo: {e}")
+
+# Pokretanje sistemskih niti
 threading.Thread(target=send_search, daemon=True).start()
 threading.Thread(target=remove_expired_devices, daemon=True).start()
 threading.Thread(target=receive_search_responses, daemon=True).start()
@@ -230,5 +346,3 @@ while True:
             registry.update_last_seen(usn)
         
         continue
-
-
