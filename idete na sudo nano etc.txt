@@ -1,0 +1,20 @@
+# idete na sudo nano /etc/mosquitto/conf.d/MqttIotPodesavanja.conf   kad promenite sve ctrl+o pa enter pa ctrl+x
+
+#Osnovna podešavanja sistema
+pid_file /run/mosquitto/mosquitto.pid
+persistence true
+persistence_location /var/lib/mosquitto/
+log_dest file /var/log/mosquitto/mosquitto.log
+
+# Bezbednost (dozvoli povezivanje bez šifre)
+allow_anonymous true
+
+# 1. Listener - Standardni MQTT za tvoje kontrolere i senzore
+listener 1883 0.0.0.0
+
+# 2. Listener - WebSockets za tvoj sajt (dashboard)
+listener 9001 0.0.0.0
+protocol websockets
+
+# Uključivanje ostalih konfiguracija (UVEK ide na sam kraj fajla)
+include_dir /etc/mosquitto/conf.d

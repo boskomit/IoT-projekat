@@ -1,0 +1,821 @@
+<!DOCTYPE html>
+<html lang="sr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Smart Home · Dashboard</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/mqtt/5.3.4/mqtt.min.js"></script>
+<style>
+  :root {
+    --bg:        #0f1117;
+    --bg2:       #181c27;
+    --bg3:       #1f2535;
+    --border:    rgba(255,255,255,0.07);
+    --border2:   rgba(255,255,255,0.13);
+    --text:      #e8eaf0;
+    --muted:     #6b7280;
+    --accent:    #6366f1;
+    --accent2:   #818cf8;
+    --on:        #22c55e;
+    --off:       #374151;
+    --warn:      #f59e0b;
+    --cool:      #38bdf8;
+    --heat:      #f97316;
+    --card-r:    14px;
+    --transition: 0.35s cubic-bezier(.4,0,.2,1);
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: 'SF Pro Display', 'Inter', system-ui, sans-serif;
+    min-height: 100vh;
+    padding: 0;
+  }
+
+  header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 22px 32px;
+    border-bottom: 1px solid var(--border);
+    background: var(--bg);
+    position: sticky;
+    top: 0;
+    z-index: 10;
+    backdrop-filter: blur(8px);
+  }
+
+  .logo {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    font-size: 15px;
+    font-weight: 600;
+    letter-spacing: -0.01em;
+  }
+
+  .logo-icon {
+    width: 30px; height: 30px;
+    background: linear-gradient(135deg, var(--accent), var(--accent2));
+    border-radius: 8px;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 15px;
+  }
+
+  .conn-bar {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 12px;
+    color: var(--muted);
+  }
+
+  .conn-dot {
+    width: 7px; height: 7px;
+    border-radius: 50%;
+    background: var(--off);
+    transition: background var(--transition);
+    box-shadow: 0 0 0 0 transparent;
+  }
+
+  .conn-dot.connected {
+    background: var(--on);
+    box-shadow: 0 0 0 3px rgba(34,197,94,0.2);
+    animation: pulse-dot 2s infinite;
+  }
+
+  @keyframes pulse-dot {
+    0%,100% { box-shadow: 0 0 0 3px rgba(34,197,94,0.2); }
+    50%      { box-shadow: 0 0 0 6px rgba(34,197,94,0.05); }
+  }
+
+  #conn-label { transition: color var(--transition); }
+
+  .mqtt-config {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+  }
+
+  .mqtt-config input {
+    background: var(--bg3);
+    border: 1px solid var(--border2);
+    border-radius: 7px;
+    color: var(--text);
+    font-size: 12px;
+    padding: 6px 10px;
+    width: 130px;
+    outline: none;
+    transition: border-color 0.2s;
+  }
+
+  .mqtt-config input:focus { border-color: var(--accent); }
+
+  .btn-connect {
+    background: var(--accent);
+    color: #fff;
+    border: none;
+    border-radius: 7px;
+    font-size: 12px;
+    font-weight: 600;
+    padding: 6px 14px;
+    cursor: pointer;
+    transition: opacity 0.2s, transform 0.1s;
+  }
+
+  .btn-connect:hover { opacity: 0.85; }
+  .btn-connect:active { transform: scale(0.97); }
+
+  main {
+    padding: 28px 32px;
+    max-width: 1100px;
+    margin: 0 auto;
+  }
+
+  .section-label {
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--muted);
+    margin-bottom: 14px;
+  }
+
+  .grid-2 {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+    gap: 14px;
+    margin-bottom: 28px;
+  }
+
+  .grid-3 {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+    gap: 14px;
+    margin-bottom: 28px;
+  }
+
+  .card {
+    background: var(--bg2);
+    border: 1px solid var(--border);
+    border-radius: var(--card-r);
+    padding: 20px 22px;
+    position: relative;
+    overflow: hidden;
+    transition: all var(--transition);
+  }
+
+  .card:hover { border-color: var(--border2); }
+
+  /* NOVI STIL: Kada uređaj nije aktivan, kartica bledi i dobija crvenkasti/sivi šmek */
+  .card.disconnected-device {
+    opacity: 0.35;
+    filter: grayscale(80%);
+    border-color: rgba(239, 68, 68, 0.15) !important;
+    background: linear-gradient(180deg, var(--bg2), #151217);
+  }
+  
+  /* Indikator "Offline" teksta diskretno u uglu kartice */
+  .card.disconnected-device::after {
+    content: 'OFFLINE';
+    position: absolute;
+    top: 12px;
+    right: 14px;
+    font-size: 8px;
+    font-weight: 900;
+    color: #ef4444;
+    letter-spacing: 0.05em;
+    background: rgba(239, 68, 68, 0.1);
+    padding: 2px 6px;
+    border-radius: 4px;
+  }
+
+  .card-eyebrow {
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--muted);
+    margin-bottom: 10px;
+  }
+
+  .card-title {
+    font-size: 13px;
+    font-weight: 500;
+    color: var(--text);
+    margin-bottom: 16px;
+  }
+
+  .metric-value {
+    font-size: 38px;
+    font-weight: 700;
+    letter-spacing: -0.03em;
+    line-height: 1;
+    margin-bottom: 4px;
+    transition: color var(--transition);
+  }
+
+  .metric-unit {
+    font-size: 16px;
+    font-weight: 400;
+    color: var(--muted);
+  }
+
+  .metric-sub {
+    font-size: 12px;
+    color: var(--muted);
+    margin-top: 6px;
+  }
+
+  .status-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 5px 11px;
+    border-radius: 99px;
+    font-size: 12px;
+    font-weight: 600;
+    letter-spacing: 0.02em;
+    transition: background var(--transition), color var(--transition);
+  }
+
+  .status-pill.on  { background: rgba(34,197,94,0.13); color: #4ade80; }
+  .status-pill.off { background: rgba(107,114,128,0.15); color: var(--muted); }
+  .status-pill.heat { background: rgba(249,115,22,0.13); color: #fb923c; }
+  .status-pill.cool { background: rgba(56,189,248,0.13); color: #38bdf8; }
+  .status-pill.up  { background: rgba(99,102,241,0.13); color: var(--accent2); }
+  .status-pill.down { background: rgba(107,114,128,0.15); color: var(--muted); }
+
+  .pill-dot {
+    width: 6px; height: 6px;
+    border-radius: 50%;
+    background: currentColor;
+  }
+
+  .people-count {
+    font-size: 52px;
+    font-weight: 800;
+    letter-spacing: -0.04em;
+    line-height: 1;
+    color: var(--accent2);
+    transition: color var(--transition);
+  }
+
+  .people-count.zero { color: var(--muted); }
+
+  .people-icons {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin-top: 12px;
+    min-height: 28px;
+  }
+
+  .person-icon {
+    width: 26px; height: 26px;
+    border-radius: 50%;
+    background: rgba(99,102,241,0.2);
+    border: 1px solid rgba(99,102,241,0.35);
+    display: flex; align-items: center; justify-content: center;
+    font-size: 13px;
+    animation: pop-in 0.2s cubic-bezier(.175,.885,.32,1.275);
+  }
+
+  @keyframes pop-in {
+    from { transform: scale(0); opacity: 0; }
+    to   { transform: scale(1); opacity: 1; }
+  }
+
+  .temp-bar-wrap {
+    margin-top: 14px;
+    height: 6px;
+    background: var(--bg3);
+    border-radius: 99px;
+    overflow: hidden;
+  }
+
+  .temp-bar {
+    height: 100%;
+    border-radius: 99px;
+    transition: width 0.7s cubic-bezier(.4,0,.2,1), background 0.5s;
+    background: linear-gradient(90deg, var(--cool), var(--heat));
+  }
+
+  .log-wrap {
+    background: var(--bg2);
+    border: 1px solid var(--border);
+    border-radius: var(--card-r);
+    overflow: hidden;
+  }
+
+  .log-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 14px 18px;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .log-header span { font-size: 12px; font-weight: 600; color: var(--muted); letter-spacing: 0.08em; text-transform: uppercase; }
+
+  .btn-clear {
+    background: none;
+    border: 1px solid var(--border2);
+    border-radius: 6px;
+    color: var(--muted);
+    font-size: 11px;
+    padding: 3px 9px;
+    cursor: pointer;
+    transition: color 0.2s, border-color 0.2s;
+  }
+
+  .btn-clear:hover { color: var(--text); border-color: var(--border); }
+
+  #log-list {
+    list-style: none;
+    max-height: 240px;
+    overflow-y: auto;
+    padding: 8px 0;
+    scrollbar-width: thin;
+    scrollbar-color: var(--border2) transparent;
+  }
+
+  .log-item {
+    display: grid;
+    grid-template-columns: 60px 110px 1fr;
+    gap: 0 10px;
+    padding: 6px 18px;
+    font-size: 12px;
+    border-bottom: 1px solid var(--border);
+    animation: slide-in 0.2s ease;
+  }
+
+  .log-item:last-child { border-bottom: none; }
+
+  @keyframes slide-in {
+    from { opacity: 0; transform: translateY(-4px); }
+    to   { opacity: 1; transform: translateY(0); }
+  }
+
+  .log-time { color: var(--muted); font-variant-numeric: tabular-nums; }
+
+  .log-topic {
+    color: var(--accent2);
+    font-family: 'SF Mono', 'Fira Code', monospace;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .log-payload {
+    color: var(--text);
+    font-family: 'SF Mono', 'Fira Code', monospace;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .device-list {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  .device-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 10px 14px;
+    background: var(--bg3);
+    border-radius: 9px;
+    border: 1px solid var(--border);
+    font-size: 13px;
+    transition: all var(--transition);
+  }
+
+  .device-row.inactive { opacity: 0.25; filter: grayscale(100%); border-color: transparent; }
+
+  .device-id {
+    font-family: 'SF Mono', 'Fira Code', monospace;
+    font-size: 12px;
+    color: var(--accent2);
+  }
+
+  .device-type-badge {
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    padding: 2px 7px;
+    border-radius: 4px;
+    background: rgba(99,102,241,0.1);
+    color: var(--accent2);
+  }
+
+  .device-type-badge.actuator {
+    background: rgba(34,197,94,0.1);
+    color: #4ade80;
+  }
+
+  .card.active-glow::before {
+    content: '';
+    position: absolute;
+    inset: 0;
+    border-radius: var(--card-r);
+    background: radial-gradient(ellipse at 50% 0%, rgba(99,102,241,0.08), transparent 70%);
+    pointer-events: none;
+  }
+
+  .timestamp {
+    font-size: 11px;
+    color: var(--muted);
+    font-variant-numeric: tabular-nums;
+  }
+
+  @media (max-width: 600px) {
+    header { padding: 14px 16px; flex-wrap: wrap; gap: 10px; }
+    main { padding: 16px; }
+    .mqtt-config input { width: 90px; }
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="logo">
+    <div class="logo-icon">🏠</div>
+    Smart Home
+  </div>
+  <div class="conn-bar">
+    <div class="conn-dot" id="conn-dot"></div>
+    <span id="conn-label">Nije povezano</span>
+  </div>
+  <div class="mqtt-config">
+    <input id="inp-host" value="localhost" placeholder="host">
+    <input id="inp-port" value="9001" placeholder="port" style="width:70px">
+    <button class="btn-connect" id="btn-connect" onclick="toggleConnect()">Poveži</button>
+  </div>
+</header>
+
+<main>
+
+  <div class="section-label">Senzori</div>
+  <div class="grid-2">
+
+    <div class="card active-glow" id="card-motion-sensors">
+      <div class="card-eyebrow">Senzori Pokreta (Vrata)</div>
+      <div class="people-count zero" id="people-count">0</div>
+      <div class="people-icons" id="people-icons"></div>
+      <div class="metric-sub" id="people-sub">Kuća je prazna</div>
+    </div>
+
+    <div class="card" id="card-temperature_sensor">
+      <div class="card-eyebrow">Temperatura</div>
+      <div class="metric-value" id="temp-value">—<span class="metric-unit"> °C</span></div>
+      <div class="temp-bar-wrap">
+        <div class="temp-bar" id="temp-bar" style="width:50%"></div>
+      </div>
+      <div class="metric-sub" id="temp-sub">Čeka podatak...</div>
+    </div>
+
+  </div>
+
+  <div class="section-label">Aktuatori</div>
+  <div class="grid-2">
+
+    <div class="card" id="card-light_actuator">
+      <div class="card-eyebrow">Svetlo · home/light/control</div>
+      <div class="card-title">Osvetljenje</div>
+      <span class="status-pill off" id="light-pill">
+        <span class="pill-dot"></span>
+        <span id="light-label">OFF</span>
+      </span>
+    </div>
+
+    <div class="card" id="card-blinds_actuator">
+      <div class="card-eyebrow">Roletne · home/blinds/control</div>
+      <div class="card-title">Žaluzine</div>
+      <span class="status-pill down" id="blinds-pill">
+        <span class="pill-dot"></span>
+        <span id="blinds-label">DOWN</span>
+      </span>
+    </div>
+
+    <div class="card" id="card-thermostat_actuator">
+      <div class="card-eyebrow">HVAC · home/hvac/control</div>
+      <div class="card-title">Termostat</div>
+      <span class="status-pill off" id="hvac-pill">
+        <span class="pill-dot"></span>
+        <span id="hvac-label">OFF</span>
+      </span>
+    </div>
+
+    <div class="card">
+      <div class="card-eyebrow">Pokret · poslednji log</div>
+      <div class="card-title">Događaj sa vrata</div>
+      <div style="font-size:12px;color:var(--muted)" id="motion-last">Nema eventa...</div>
+      <div style="margin-top:6px;" class="timestamp" id="motion-ts"></div>
+    </div>
+
+  </div>
+
+  <div class="grid-3">
+
+    <div class="card">
+      <div class="card-eyebrow" style="margin-bottom:14px">SSDP uređaji</div>
+      <div class="device-list" id="device-list">
+        <div style="font-size:12px;color:var(--muted)">Nema registrovanih uređaja.<br>Poveži se na broker.</div>
+      </div>
+    </div>
+
+    <div class="log-wrap" style="grid-column: span 2 / span 2;">
+      <div class="log-header">
+        <span>MQTT log</span>
+        <button class="btn-clear" onclick="clearLog()">Obriši</button>
+      </div>
+      <ul id="log-list"></ul>
+    </div>
+
+  </div>
+
+</main>
+
+<script>
+let client = null;
+let connected = false;
+
+const TOPICS = [
+  'home/door/sensor1',
+  'home/door/sensor2',
+  'home/temp/current',
+  'home/light/control',
+  'home/blinds/control',
+  'home/hvac/control',
+  'home/system/devices', // NOVI TOPIK ZA SINKRONIZACIJU SSDP LISTE
+];
+
+const knownDevices = {
+  'project-iot:motion_sensor_1':   { id: 'motion_sensor_1',  type: 'sensor',  cardId: 'card-motion-sensors' },
+  'project-iot:motion_sensor_2':   { id: 'motion_sensor_2',  type: 'sensor',  cardId: 'card-motion-sensors' },
+  'project-iot:temperature_sensor':{ id: 'temperature_sensor',type: 'sensor',  cardId: 'card-temperature_sensor' },
+  'project-iot:light_actuator':    { id: 'light_actuator',   type: 'actuator',cardId: 'card-light_actuator' },
+  'project-iot:blinds_actuator':   { id: 'blinds_actuator',  type: 'actuator',cardId: 'card-blinds_actuator' },
+  'project-iot:thermostat_actuator':{ id: 'thermostat_actuator', type: 'actuator', cardId: 'card-thermostat_actuator' },
+};
+
+const activeDevices = new Set();
+
+function renderDevices() {
+  const list = document.getElementById('device-list');
+  if(!list) return;
+  list.innerHTML = '';
+  
+  for (const [usn, dev] of Object.entries(knownDevices)) {
+    const active = activeDevices.has(usn);
+    const row = document.createElement('div');
+    row.className = 'device-row' + (active ? '' : ' inactive');
+    row.innerHTML = `
+      <span class="device-id">${dev.id}</span>
+      <span class="device-type-badge ${dev.type}">${dev.type}</span>
+    `;
+    list.appendChild(row);
+    
+    // DINAMIČKO MENJANJE BOJE CELE KARTICE NA EKRANU
+    const cardElement = document.getElementById(dev.cardId);
+    if(cardElement) {
+      // Za senzore pokreta važi specifično pravilo: kartica je aktivna ako je BILO KOJI od dva senzora živ
+      if (dev.cardId === 'card-motion-sensors') {
+        const s1Aktivno = activeDevices.has('project-iot:motion_sensor_1');
+        const s2Aktivno = activeDevices.has('project-iot:motion_sensor_2');
+        if (s1Aktivno || s2Aktivno) {
+          cardElement.classList.remove('disconnected-device');
+        } else {
+          cardElement.classList.add('disconnected-device');
+        }
+      } else {
+        // Za sve ostale standardne kartice (temperatura, svetlo, roletne, hvac)
+        if (active) {
+          cardElement.classList.remove('disconnected-device');
+        } else {
+          cardElement.classList.add('disconnected-device');
+        }
+      }
+    }
+  }
+}
+
+renderDevices();
+
+function setConnected(state, msg) {
+  connected = state;
+  document.getElementById('conn-dot').className = 'conn-dot' + (state ? ' connected' : '');
+  document.getElementById('conn-label').textContent = msg;
+  document.getElementById('btn-connect').textContent = state ? 'Prekini' : 'Poveži';
+  
+  if(!state) {
+    activeDevices.clear();
+    renderDevices();
+  }
+}
+
+function toggleConnect() {
+  if (connected) {
+    if (client) client.end();
+    setConnected(false, 'Prekinuto');
+    return;
+  }
+  const host = document.getElementById('inp-host').value.trim() || 'localhost';
+  const port = parseInt(document.getElementById('inp-port').value) || 9001;
+  const url  = `ws://${host}:${port}/mqtt`;
+
+  setConnected(false, 'Povezivanje...');
+
+  try {
+    client = mqtt.connect(url, {
+      clientId: 'iot_dashboard_' + Math.random().toString(16).slice(2,6),
+      reconnectPeriod: 3000,
+      connectTimeout: 5000,
+    });
+  } catch(e) {
+    setConnected(false, 'Greška: ' + e.message);
+    return;
+  }
+
+  client.on('connect', () => {
+    setConnected(true, `${host}:${port}`);
+    TOPICS.forEach(t => client.subscribe(t, { qos: 1 }));
+    addLog('sys', 'Konekcija uspešna · pretplaćen na sve topike');
+  });
+
+  client.on('error', (err) => {
+    setConnected(false, 'Greška konekcije');
+    addLog('sys', 'Greška: ' + err.message);
+  });
+
+  client.on('close', () => {
+    if (connected) setConnected(false, 'Veza prekinuta');
+  });
+
+  client.on('message', (topic, message) => {
+    const raw = message.toString();
+    // Sakrij sistemske poruke o uređajima iz glavnog MQTT loga da ne guše prozor
+    if (topic !== 'home/system/devices') {
+       addLog(topic, raw);
+    }
+    let payload;
+    try { payload = JSON.parse(raw); } catch { payload = null; }
+    handleMessage(topic, payload, raw);
+  });
+}
+
+let peopleCount = 0;
+let lastTemp    = null;
+
+function handleMessage(topic, payload, raw) {
+  // --- OBRADA NOVE SISTEMSKE PORUKE SA KONTROLERA ---
+  if (topic === 'home/system/devices' && payload) {
+    activeDevices.clear();
+    // Python nam šalje niz npr. ["motion_sensor_1", "temperature_sensor"]
+    payload.forEach(activeId => {
+      // Pronalazimo pun USN ključ na osnovu ID-a
+      for (const [usn, dev] of Object.entries(knownDevices)) {
+        if (dev.id === activeId) {
+          activeDevices.add(usn);
+        }
+      }
+    });
+    renderDevices(); // Ponovo iscrtaj SSDP listu i osveži prozirnost kartica
+    return;
+  }
+
+  if (topic === 'home/door/sensor1' && payload) {
+    const count = payload.people_count || 1;
+    const event = payload.event || '';
+    if (event === 'ulazak') {
+      peopleCount += count;
+    } else if (event === 'izlazak') {
+      peopleCount = Math.max(0, peopleCount - count);
+    }
+    updatePeople();
+    updateMotion(`sensor1 · ${event} · ${count} ${count === 1 ? 'osoba' : 'osobe'}`);
+  }
+
+  if (topic === 'home/door/sensor2' && payload) {
+    const count = payload.people_count || 1;
+    const event = payload.event || '';
+    if (event === 'ulazak') {
+      peopleCount += count;
+    } else if (event === 'izlazak') {
+      peopleCount = Math.max(0, peopleCount - count);
+    }
+    updatePeople();
+    updateMotion(`sensor2 · ${event} · ${count} ${count === 1 ? 'osoba' : 'osobe'}`);
+  }
+
+  if (topic === 'home/temp/current' && payload) {
+    lastTemp = payload.temperature;
+    updateTemp(lastTemp);
+  }
+
+  if (topic === 'home/light/control') {
+    setActuatorPill('light', raw.trim());
+  }
+
+  if (topic === 'home/blinds/control') {
+    setActuatorPill('blinds', raw.trim());
+  }
+
+  if (topic === 'home/hvac/control') {
+    setActuatorPill('hvac', raw.trim());
+  }
+}
+
+function updatePeople() {
+  const el    = document.getElementById('people-count');
+  const sub   = document.getElementById('people-sub');
+  const icons = document.getElementById('people-icons');
+
+  el.textContent = peopleCount;
+  el.className   = 'people-count' + (peopleCount === 0 ? ' zero' : '');
+
+  sub.textContent = peopleCount === 0
+    ? 'Kuća je prazna'
+    : `${peopleCount} ${peopleCount === 1 ? 'osoba' : peopleCount < 5 ? 'osobe' : 'osoba'} u kući`;
+
+  icons.innerHTML = '';
+  for (let i = 0; i < Math.min(peopleCount, 12); i++) {
+    const d = document.createElement('div');
+    d.className = 'person-icon';
+    d.textContent = '🧑';
+    icons.appendChild(d);
+  }
+}
+
+function updateTemp(t) {
+  document.getElementById('temp-value').innerHTML =
+    `${t}<span class="metric-unit"> °C</span>`;
+
+  const pct = Math.min(100, Math.max(0, ((t - 10) / 30) * 100));
+  document.getElementById('temp-bar').style.width = pct + '%';
+
+  let sub = '';
+  if (t < 18)      sub = '🥶 Hladno · kontroler aktivira grejanje';
+  else if (t > 26) sub = '🌡️ Toplo · kontroler aktivira hlađenje';
+  else             sub = '✅ Temperatura je optimalna';
+
+  document.getElementById('temp-sub').textContent = sub;
+}
+
+function updateMotion(text) {
+  document.getElementById('motion-last').textContent = text;
+  document.getElementById('motion-ts').textContent = now();
+}
+
+function setActuatorPill(id, state) {
+  const pill  = document.getElementById(id + '-pill');
+  const label = document.getElementById(id + '-label');
+  if (!pill) return;
+
+  let cls = 'status-pill ';
+  if (state === 'ON')   cls += 'on';
+  else if (state === 'OFF')  cls += 'off';
+  else if (state === 'HEAT') cls += 'heat';
+  else if (state === 'COOL') cls += 'cool';
+  else if (state === 'UP')   cls += 'up';
+  else if (state === 'DOWN') cls += 'down';
+  else if (state === 'STOP') cls += 'off';
+  else cls += 'off';
+
+  pill.className = cls;
+  label.textContent = state;
+}
+
+const MAX_LOG = 60;
+
+function addLog(topic, payload) {
+  const list = document.getElementById('log-list');
+  const li   = document.createElement('li');
+  li.className = 'log-item';
+  li.innerHTML = `
+    <span class="log-time">${now()}</span>
+    <span class="log-topic">${topic}</span>
+    <span class="log-payload">${payload}</span>
+  `;
+  list.prepend(li);
+  if (list.children.length > MAX_LOG) list.lastChild.remove();
+}
+
+function clearLog() {
+  document.getElementById('log-list').innerHTML = '';
+}
+
+function now() {
+  return new Date().toLocaleTimeString('sr', { hour12: false });
+}
+</script>
+
+</body>
+</html>
